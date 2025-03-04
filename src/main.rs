@@ -116,6 +116,8 @@ fn execute_with_alphabet<AlphabetType: Alphabet + Debug + Clone + Eq + 'static>(
 
     if records.is_empty() {
         bail!("Found no fasta records in input files");
+    } else if records.len() == 1 {
+        bail!("Found only one fasta record in input files");
     }
 
     let mut record_ids: Vec<_> = records.iter().map(|record| record.id.clone()).collect();
