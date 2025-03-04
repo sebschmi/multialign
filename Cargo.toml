@@ -7,3 +7,8 @@ edition = "2021"
 license = "BSD-2-Clause"
 
 [dependencies]
+clap = { version = "4.5.31", features = ["derive"] }
+compact-genome = { version = "12.0.1", features = ["io"] }
+log = "0.4.26"
+simplelog = "0.12.2"
+anyhow = "1.0.97"
