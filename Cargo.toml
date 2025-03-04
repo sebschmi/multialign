@@ -1,6 +1,9 @@
 [package]
 name = "multialign"
+description = "A multi-sequence aligner"
+authors = ["Sebastian Schmidt <sebastian.schmidt@helsinki.fi>"]
 version = "0.0.0"
 edition = "2021"
+license = "BSD-2-Clause"
 
 [dependencies]
