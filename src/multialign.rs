@@ -1,7 +1,9 @@
 use std::{
+    collections::HashSet,
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
+    time::Instant,
     vec,
 };
 
@@ -10,7 +12,7 @@ use compact_genome::interface::{
     alphabet::{Alphabet, AlphabetCharacter},
     sequence::GenomeSequence,
 };
-use generic_a_star::{cost::Cost, reset::Reset, AStar, AStarContext, AStarNode};
+use generic_a_star::{cost::Cost, reset::Reset, AStar, AStarContext, AStarNode, AStarResult};
 use log::info;
 
 mod display;
@@ -219,6 +221,8 @@ pub fn multialign_astar<
 >(
     sequences: &[&SequenceType],
 ) -> Result<()> {
+    info!("Aligning {} sequences", sequences.len());
+
     let max_sequence_amount = usize::BITS - 1;
     let sequence_len_u32: u32 = sequences.len().try_into().with_context(|| {
         format!(
@@ -436,17 +440,87 @@ fn multialign_astar_with_identifier<
 >(
     sequences: &[&SequenceType],
 ) -> Result<()> {
+    let start_time = Instant::now();
     let mut a_star = AStar::new(Context::<_, _, Identifier>::new(sequences));
     a_star.initialise();
 
     match a_star.search() {
-        generic_a_star::AStarResult::FoundTarget { cost, .. } => info!("Alignment cost {}", cost),
-        generic_a_star::AStarResult::ExceededCostLimit { .. } => unreachable!("No cost limit set"),
-        generic_a_star::AStarResult::ExceededMemoryLimit { .. } => {
+        AStarResult::FoundTarget { cost, .. } => info!("Alignment cost {}", cost),
+        AStarResult::ExceededCostLimit { .. } => unreachable!("No cost limit set"),
+        AStarResult::ExceededMemoryLimit { .. } => {
             unreachable!("No memory limit set")
         }
-        generic_a_star::AStarResult::NoTarget => unreachable!("Search always finds a target"),
+        AStarResult::NoTarget => unreachable!("Search always finds a target"),
     }
 
+    let end_time = Instant::now();
+    let duration = end_time - start_time;
+
+    info!("Runtime: {:.2}s", duration.as_secs_f64());
+    info!("Performance: {:?}", a_star.performance_counters());
+    info!(
+        "Alignment: {}",
+        backtrack_cigar(sequences, a_star.backtrack())
+    );
+
     Ok(())
+}
+
+fn backtrack_cigar<
+    AlphabetType: Alphabet + Debug + Clone + Eq + 'static,
+    SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
+    Identifier: NodeIdentifier,
+>(
+    sequences: &[&SequenceType],
+    edges: impl IntoIterator<Item = Node<Identifier>>,
+) -> String {
+    enum CigarElement {
+        Match { amount: usize },
+        Mismatch { column: Vec<Option<char>> },
+    }
+
+    let mut cigar = Vec::new();
+
+    for edge in edges {
+        let mut column = Vec::new();
+
+        for (index, sequence) in sequences.iter().enumerate() {
+            let predecessor_offset = edge.predecessor.as_ref().unwrap().offset(index);
+            let offset = edge.identifier.offset(index);
+
+            if predecessor_offset == offset {
+                column.push(None);
+            } else {
+                debug_assert_eq!(predecessor_offset + 1, offset);
+                column.push(Some(sequence[predecessor_offset].clone().into()));
+            }
+        }
+
+        let column_set: HashSet<_> = column.iter().copied().collect();
+        if column_set.len() == 1 {
+            if let Some(CigarElement::Match { amount }) = cigar.last_mut() {
+                *amount += 1;
+            } else {
+                cigar.push(CigarElement::Match { amount: 1 });
+            }
+        } else {
+            cigar.push(CigarElement::Mismatch { column });
+        }
+    }
+
+    let mut cigar_string = String::new();
+    for element in cigar.iter().rev() {
+        match element {
+            CigarElement::Match { amount } => cigar_string.push_str(&format!("{amount}M")),
+            CigarElement::Mismatch { column } => {
+                cigar_string.push('[');
+                for character in column {
+                    cigar_string.push(character.unwrap_or('-'));
+                }
+                cigar_string.push(']');
+            }
+        }
+    }
+
+    cigar_string
 }

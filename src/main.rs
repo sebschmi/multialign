@@ -131,6 +131,8 @@ fn execute_with_alphabet<AlphabetType: Alphabet + Debug + Clone + Eq + 'static>(
         bail!("Found {} distinct duplicate ids", duplicate_ids.len());
     }
 
+    info!("Loaded {} sequences", records.len());
+
     let sequences: Vec<_> = records
         .iter()
         .map(|record| {
