@@ -2,10 +2,14 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
+    vec,
 };
 
-use anyhow::Result;
-use compact_genome::interface::{alphabet::Alphabet, sequence::GenomeSequence};
+use anyhow::{bail, Context as _, Result};
+use compact_genome::interface::{
+    alphabet::{Alphabet, AlphabetCharacter},
+    sequence::GenomeSequence,
+};
 use generic_a_star::{cost::Cost, reset::Reset, AStar, AStarContext, AStarNode};
 use log::info;
 
@@ -15,6 +19,8 @@ trait NodeIdentifier: Debug + Display + Clone + Eq + Ord + Hash {
     fn create_root(sequence_amount: usize) -> Self;
 
     fn offset(&self, index: usize) -> usize;
+
+    fn increment(&mut self, index: usize);
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
@@ -38,6 +44,10 @@ impl<const SEQUENCE_AMOUNT: usize> NodeIdentifier for ArrayIdentifier<SEQUENCE_A
     fn offset(&self, index: usize) -> usize {
         self.offsets[index]
     }
+
+    fn increment(&mut self, index: usize) {
+        self.offsets[index] += 1;
+    }
 }
 
 impl NodeIdentifier for VecIdentifier {
@@ -49,6 +59,10 @@ impl NodeIdentifier for VecIdentifier {
 
     fn offset(&self, index: usize) -> usize {
         self.offsets[index]
+    }
+
+    fn increment(&mut self, index: usize) {
+        self.offsets[index] += 1;
     }
 }
 
@@ -92,6 +106,7 @@ struct Context<
     Identifier: NodeIdentifier,
 > {
     sequences: &'sequences [&'sequences SequenceType],
+    character_counts: Vec<u8>,
 
     phantom_data: PhantomData<(Identifier, AlphabetType)>,
 }
@@ -112,8 +127,38 @@ impl<
         }
     }
 
-    fn generate_successors(&mut self, _node: &Self::Node, _output: &mut impl Extend<Self::Node>) {
-        todo!()
+    fn generate_successors(&mut self, node: &Self::Node, output: &mut impl Extend<Self::Node>) {
+        for gaps in 1..(1usize << self.sequences.len()) {
+            // Compute next identifier and cost.
+            let mut identifier = node.identifier.clone();
+            self.character_counts.fill(0);
+
+            for (index, sequence) in self.sequences.iter().enumerate() {
+                if gaps & (1 << index) != 0 {
+                    self.character_counts
+                        [usize::from(sequence[identifier.offset(index)].index())] += 1;
+                    identifier.increment(index);
+                } else {
+                    // Last entry represents a gap.
+                    self.character_counts[usize::from(AlphabetType::SIZE)] += 1;
+                }
+            }
+            let identifier = identifier;
+
+            // Compute cost increment.
+            let score_increment =
+                self.character_counts
+                    .iter()
+                    .fold(Cost::ZERO, |score, character_count| {
+                        let character_count = u64::from(*character_count);
+                        let character_score = Cost::from(character_count * character_count);
+                        score + character_score
+                    });
+            let max_score = Cost::from((self.sequences.len() * self.sequences.len()) as u64);
+            let cost_increment = max_score - score_increment;
+
+            todo!("add to output")
+        }
     }
 
     fn is_target(&self, node: &Self::Node) -> bool {
@@ -153,6 +198,7 @@ impl<
     fn new(sequences: &'sequences [&'sequences SequenceType]) -> Self {
         Self {
             sequences,
+            character_counts: vec![0; usize::from(AlphabetType::SIZE) + 1],
             phantom_data: PhantomData,
         }
     }
@@ -164,6 +210,22 @@ pub fn multialign_astar<
 >(
     sequences: &[&SequenceType],
 ) -> Result<()> {
+    let max_sequence_amount = usize::BITS - 1;
+    let sequence_len_u32: u32 = sequences.len().try_into().with_context(|| {
+        format!(
+            "Exceeded maximum supported sequence amount: {} > {}",
+            sequences.len(),
+            max_sequence_amount
+        )
+    })?;
+    if sequence_len_u32 > max_sequence_amount {
+        bail!(
+            "Exceeded maximum supported sequence amount: {} > {}",
+            sequences.len(),
+            max_sequence_amount
+        );
+    }
+
     match sequences.len() {
         0 | 1 => panic!("Called multialign_astar with less than two sequences"),
         2 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<2>>(
