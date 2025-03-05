@@ -13,6 +13,8 @@ mod display;
 
 trait NodeIdentifier: Debug + Display + Clone + Eq + Ord + Hash {
     fn create_root(sequence_amount: usize) -> Self;
+
+    fn offset(&self, index: usize) -> usize;
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
@@ -32,6 +34,10 @@ impl<const SEQUENCE_AMOUNT: usize> NodeIdentifier for ArrayIdentifier<SEQUENCE_A
             offsets: [0; SEQUENCE_AMOUNT],
         }
     }
+
+    fn offset(&self, index: usize) -> usize {
+        self.offsets[index]
+    }
 }
 
 impl NodeIdentifier for VecIdentifier {
@@ -39,6 +45,10 @@ impl NodeIdentifier for VecIdentifier {
         Self {
             offsets: vec![0; sequence_amount],
         }
+    }
+
+    fn offset(&self, index: usize) -> usize {
+        self.offsets[index]
     }
 }
 
@@ -55,7 +65,7 @@ impl<Identifier: NodeIdentifier> AStarNode for Node<Identifier> {
     type EdgeType = Self;
 
     fn identifier(&self) -> &Self::Identifier {
-        todo!()
+        &self.identifier
     }
 
     fn cost(&self) -> Cost {
@@ -67,11 +77,11 @@ impl<Identifier: NodeIdentifier> AStarNode for Node<Identifier> {
     }
 
     fn predecessor(&self) -> Option<&Self::Identifier> {
-        todo!()
+        self.predecessor.as_ref()
     }
 
     fn predecessor_edge_type(&self) -> Option<Self::EdgeType> {
-        todo!()
+        self.predecessor.as_ref().map(|_| self.clone())
     }
 }
 
@@ -106,16 +116,19 @@ impl<
         todo!()
     }
 
-    fn is_target(&self, _node: &Self::Node) -> bool {
-        todo!()
+    fn is_target(&self, node: &Self::Node) -> bool {
+        self.sequences.iter().enumerate().all(|(index, sequence)| {
+            debug_assert!(node.identifier.offset(index) <= sequence.len());
+            node.identifier.offset(index) == sequence.len()
+        })
     }
 
-    fn cost_limit(&self) -> Option<generic_a_star::cost::Cost> {
-        todo!()
+    fn cost_limit(&self) -> Option<Cost> {
+        None
     }
 
     fn memory_limit(&self) -> Option<usize> {
-        todo!()
+        None
     }
 }
 
@@ -126,7 +139,7 @@ impl<
     > Reset for Context<'_, AlphabetType, SequenceType, Identifier>
 {
     fn reset(&mut self) {
-        todo!()
+        // Do nothing.
     }
 }
 
