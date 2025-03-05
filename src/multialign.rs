@@ -134,7 +134,7 @@ impl<
             self.character_counts.fill(0);
 
             for (index, sequence) in self.sequences.iter().enumerate() {
-                if gaps & (1 << index) != 0 {
+                if gaps & (1 << index) != 0 && identifier.offset(index) < sequence.len() {
                     self.character_counts
                         [usize::from(sequence[identifier.offset(index)].index())] += 1;
                     identifier.increment(index);
@@ -423,119 +423,6 @@ pub fn multialign_astar<
         63 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<63>>(
             sequences,
         ),
-        64 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<64>>(
-            sequences,
-        ),
-        65 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<65>>(
-            sequences,
-        ),
-        66 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<66>>(
-            sequences,
-        ),
-        67 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<67>>(
-            sequences,
-        ),
-        68 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<68>>(
-            sequences,
-        ),
-        69 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<69>>(
-            sequences,
-        ),
-        70 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<70>>(
-            sequences,
-        ),
-        71 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<71>>(
-            sequences,
-        ),
-        72 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<72>>(
-            sequences,
-        ),
-        73 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<73>>(
-            sequences,
-        ),
-        74 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<74>>(
-            sequences,
-        ),
-        75 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<75>>(
-            sequences,
-        ),
-        76 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<76>>(
-            sequences,
-        ),
-        77 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<77>>(
-            sequences,
-        ),
-        78 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<78>>(
-            sequences,
-        ),
-        79 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<79>>(
-            sequences,
-        ),
-        80 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<80>>(
-            sequences,
-        ),
-        81 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<81>>(
-            sequences,
-        ),
-        82 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<82>>(
-            sequences,
-        ),
-        83 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<83>>(
-            sequences,
-        ),
-        84 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<84>>(
-            sequences,
-        ),
-        85 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<85>>(
-            sequences,
-        ),
-        86 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<86>>(
-            sequences,
-        ),
-        87 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<87>>(
-            sequences,
-        ),
-        88 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<88>>(
-            sequences,
-        ),
-        89 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<89>>(
-            sequences,
-        ),
-        90 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<90>>(
-            sequences,
-        ),
-        91 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<91>>(
-            sequences,
-        ),
-        92 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<92>>(
-            sequences,
-        ),
-        93 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<93>>(
-            sequences,
-        ),
-        94 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<94>>(
-            sequences,
-        ),
-        95 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<95>>(
-            sequences,
-        ),
-        96 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<96>>(
-            sequences,
-        ),
-        97 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<97>>(
-            sequences,
-        ),
-        98 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<98>>(
-            sequences,
-        ),
-        99 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<99>>(
-            sequences,
-        ),
-        100 => {
-            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<100>>(
-                sequences,
-            )
-        }
         _ => {
             multialign_astar_with_identifier::<AlphabetType, SequenceType, VecIdentifier>(sequences)
         }
@@ -550,6 +437,8 @@ fn multialign_astar_with_identifier<
     sequences: &[&SequenceType],
 ) -> Result<()> {
     let mut a_star = AStar::new(Context::<_, _, Identifier>::new(sequences));
+    a_star.initialise();
+
     match a_star.search() {
         generic_a_star::AStarResult::FoundTarget { cost, .. } => info!("Alignment cost {}", cost),
         generic_a_star::AStarResult::ExceededCostLimit { .. } => unreachable!("No cost limit set"),
