@@ -151,13 +151,22 @@ impl<
                     .iter()
                     .fold(Cost::ZERO, |score, character_count| {
                         let character_count = u64::from(*character_count);
-                        let character_score = Cost::from(character_count * character_count);
+                        let character_score = if character_count >= 2 {
+                            Cost::from(character_count * (character_count - 1) / 2)
+                        } else {
+                            Cost::ZERO
+                        };
                         score + character_score
                     });
-            let max_score = Cost::from((self.sequences.len() * self.sequences.len()) as u64);
+            let max_score =
+                Cost::from((self.sequences.len() * (self.sequences.len() - 1) / 2) as u64);
             let cost_increment = max_score - score_increment;
 
-            todo!("add to output")
+            output.extend(Some(Self::Node {
+                cost: node.cost + cost_increment,
+                identifier,
+                predecessor: Some(node.identifier.clone()),
+            }));
         }
     }
 
