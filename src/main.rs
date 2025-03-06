@@ -7,7 +7,9 @@ use compact_genome::{
         alphabets::{
             dna_alphabet::DnaAlphabet, dna_alphabet_or_n::DnaAlphabetOrN,
             dna_iupac_nucleic_acid_alphabet::DnaIupacNucleicAcidAlphabet,
-            rna_alphabet::RnaAlphabet, rna_alphabet_or_n::RnaAlphabetOrN,
+            famsa_amino_acid_alphabet::FamsaAminoAcidAlphabet,
+            iupac_amino_acid_alphabet::IupacAminoAcidAlphabet, rna_alphabet::RnaAlphabet,
+            rna_alphabet_or_n::RnaAlphabetOrN,
             rna_iupac_nucleic_acid_alphabet::RnaIupacNucleicAcidAlphabet,
         },
         DefaultSequenceStore,
@@ -35,7 +37,7 @@ struct Cli {
     /// The alphabet present in the input files.
     ///
     /// This must also match the alphabet used in the config.
-    #[clap(long, short = 'a', default_value = "dna-n")]
+    #[clap(long, short = 'a', default_value = "famsa-amino-acid")]
     alphabet: InputAlphabet,
 
     /// A string of (ASCII) characters that should be skipped in the input fasta.
@@ -53,6 +55,10 @@ enum InputAlphabet {
     RnaN,
     DnaIupac,
     RnaIupac,
+    /// The IUPAC amino acid alphabet.
+    IupacAminoAcid,
+    /// The FAMSA amino acid alphabet.
+    FamsaAminoAcid,
 }
 
 fn main() -> Result<()> {
@@ -74,6 +80,8 @@ fn main() -> Result<()> {
         InputAlphabet::RnaN => execute_with_alphabet::<RnaAlphabetOrN>(cli),
         InputAlphabet::DnaIupac => execute_with_alphabet::<DnaIupacNucleicAcidAlphabet>(cli),
         InputAlphabet::RnaIupac => execute_with_alphabet::<RnaIupacNucleicAcidAlphabet>(cli),
+        InputAlphabet::IupacAminoAcid => execute_with_alphabet::<IupacAminoAcidAlphabet>(cli),
+        InputAlphabet::FamsaAminoAcid => execute_with_alphabet::<FamsaAminoAcidAlphabet>(cli),
     }?;
 
     info!("Terminating");
