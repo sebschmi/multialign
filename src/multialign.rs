@@ -12,7 +12,11 @@ use compact_genome::interface::{
     alphabet::{Alphabet, AlphabetCharacter},
     sequence::GenomeSequence,
 };
-use generic_a_star::{cost::Cost, reset::Reset, AStar, AStarContext, AStarNode, AStarResult};
+use generic_a_star::{
+    cost::{AStarCost, I16Cost},
+    reset::Reset,
+    AStar, AStarContext, AStarNode, AStarResult,
+};
 use log::info;
 
 mod display;
@@ -69,27 +73,29 @@ impl NodeIdentifier for VecIdentifier {
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
-struct Node<Identifier: NodeIdentifier> {
+struct Node<Identifier: NodeIdentifier, Cost> {
     cost: Cost,
     identifier: Identifier,
     predecessor: Option<Identifier>,
 }
 
-impl<Identifier: NodeIdentifier> AStarNode for Node<Identifier> {
+impl<Identifier: NodeIdentifier, Cost: AStarCost> AStarNode for Node<Identifier, Cost> {
     type Identifier = Identifier;
 
     type EdgeType = Self;
+
+    type Cost = Cost;
 
     fn identifier(&self) -> &Self::Identifier {
         &self.identifier
     }
 
-    fn cost(&self) -> Cost {
+    fn cost(&self) -> Self::Cost {
         self.cost
     }
 
-    fn a_star_lower_bound(&self) -> Cost {
-        Cost::ZERO
+    fn a_star_lower_bound(&self) -> Self::Cost {
+        Self::Cost::zero()
     }
 
     fn predecessor(&self) -> Option<&Self::Identifier> {
@@ -104,32 +110,38 @@ impl<Identifier: NodeIdentifier> AStarNode for Node<Identifier> {
 struct Context<
     'sequences,
     AlphabetType: Alphabet,
+    Cost,
     SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
-    Identifier: NodeIdentifier,
+    Identifier,
 > {
     sequences: &'sequences [&'sequences SequenceType],
     character_counts: Vec<u8>,
 
-    phantom_data: PhantomData<(Identifier, AlphabetType)>,
+    phantom_data: PhantomData<(Identifier, AlphabetType, Cost)>,
 }
 
 impl<
         AlphabetType: Alphabet,
+        Cost: AStarCost,
         SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
         Identifier: NodeIdentifier,
-    > AStarContext for Context<'_, AlphabetType, SequenceType, Identifier>
+    > AStarContext for Context<'_, AlphabetType, Cost, SequenceType, Identifier>
+where
+    Cost::CostType: From<i16>,
 {
-    type Node = Node<Identifier>;
+    type Node = Node<Identifier, Cost>;
 
     fn create_root(&self) -> Self::Node {
         Self::Node {
-            cost: Cost::ZERO,
+            cost: Cost::zero(),
             identifier: Identifier::create_root(self.sequences.len()),
             predecessor: None,
         }
     }
 
     fn generate_successors(&mut self, node: &Self::Node, output: &mut impl Extend<Self::Node>) {
+        debug_assert!(self.sequences.len() < usize::BITS.try_into().unwrap());
+
         for gaps in 1..(1usize << self.sequences.len()) {
             // Compute next identifier and cost.
             let mut identifier = node.identifier.clone();
@@ -151,21 +163,34 @@ impl<
             let score_increment =
                 self.character_counts
                     .iter()
-                    .fold(Cost::ZERO, |score, character_count| {
-                        let character_count = u64::from(*character_count);
+                    .fold(Cost::zero(), |score, character_count| {
+                        let character_count = i16::from(*character_count);
                         let character_score = if character_count >= 2 {
-                            Cost::from(character_count * (character_count - 1) / 2)
+                            Cost::from(Cost::CostType::from(
+                                character_count
+                                    .checked_mul(character_count.checked_sub(1).unwrap())
+                                    .unwrap()
+                                    .checked_div(2)
+                                    .unwrap(),
+                            ))
                         } else {
-                            Cost::ZERO
+                            Cost::zero()
                         };
-                        score + character_score
+
+                        score.checked_add(&character_score).unwrap()
                     });
-            let max_score =
-                Cost::from((self.sequences.len() * (self.sequences.len() - 1) / 2) as u64);
-            let cost_increment = max_score - score_increment;
+            let sequences_len = i16::try_from(self.sequences.len()).unwrap();
+            let max_score = Cost::from(Cost::CostType::from(
+                sequences_len
+                    .checked_mul(sequences_len.checked_sub(1).unwrap())
+                    .unwrap()
+                    .checked_div(2)
+                    .unwrap(),
+            ));
+            let cost_increment = max_score.checked_sub(&score_increment).unwrap();
 
             output.extend(Some(Self::Node {
-                cost: node.cost + cost_increment,
+                cost: node.cost.checked_add(&cost_increment).unwrap(),
                 identifier,
                 predecessor: Some(node.identifier.clone()),
             }));
@@ -190,9 +215,10 @@ impl<
 
 impl<
         AlphabetType: Alphabet,
+        Cost: AStarCost,
         SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
         Identifier: NodeIdentifier,
-    > Reset for Context<'_, AlphabetType, SequenceType, Identifier>
+    > Reset for Context<'_, AlphabetType, Cost, SequenceType, Identifier>
 {
     fn reset(&mut self) {
         // Do nothing.
@@ -202,9 +228,10 @@ impl<
 impl<
         'sequences,
         AlphabetType: Alphabet,
+        Cost: AStarCost,
         SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
         Identifier: NodeIdentifier,
-    > Context<'sequences, AlphabetType, SequenceType, Identifier>
+    > Context<'sequences, AlphabetType, Cost, SequenceType, Identifier>
 {
     fn new(sequences: &'sequences [&'sequences SequenceType]) -> Self {
         Self {
@@ -441,7 +468,7 @@ fn multialign_astar_with_identifier<
     sequences: &[&SequenceType],
 ) -> Result<()> {
     let start_time = Instant::now();
-    let mut a_star = AStar::new(Context::<_, _, Identifier>::new(sequences));
+    let mut a_star = AStar::new(Context::<_, I16Cost, _, Identifier>::new(sequences));
     a_star.initialise();
 
     match a_star.search() {
@@ -468,11 +495,12 @@ fn multialign_astar_with_identifier<
 
 fn backtrack_cigar<
     AlphabetType: Alphabet + Debug + Clone + Eq + 'static,
+    Cost: AStarCost,
     SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
     Identifier: NodeIdentifier,
 >(
     sequences: &[&SequenceType],
-    edges: impl IntoIterator<Item = Node<Identifier>>,
+    edges: impl IntoIterator<Item = Node<Identifier, Cost>>,
 ) -> String {
     enum CigarElement {
         Match { amount: usize },

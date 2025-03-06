@@ -12,4 +12,4 @@ compact-genome = { version = "12.2.0", features = ["io"] }
 log = "0.4.26"
 simplelog = "0.12.2"
 anyhow = "1.0.97"
-generic_a_star = "0.8.2"
+generic_a_star = "0.9.3"

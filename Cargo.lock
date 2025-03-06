@@ -233,9 +233,9 @@ checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 
 [[package]]
 name = "generic_a_star"
-version = "0.8.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41a9b370e290aecbbbeb233f093ad20e494e5dffe2762c0c3652483d2dc26d40"
+checksum = "3f5de0c29cdf2784dbe27d56ee974f1e92c3c74922513d15b41578e8616c14fa"
 dependencies = [
  "binary-heap-plus",
  "deterministic_default_hasher",
