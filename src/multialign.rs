@@ -8,18 +8,17 @@ use std::{
 };
 
 use anyhow::{bail, Context as _, Result};
-use compact_genome::interface::{
-    alphabet::{Alphabet, AlphabetCharacter},
-    sequence::GenomeSequence,
-};
+use compact_genome::interface::{alphabet::Alphabet, sequence::GenomeSequence};
 use generic_a_star::{
     cost::{AStarCost, I16Cost},
     reset::Reset,
     AStar, AStarContext, AStarNode, AStarResult,
 };
 use log::info;
+use metric::MultialignMetric;
 
 mod display;
+pub mod metric;
 
 trait NodeIdentifier: Debug + Display + Clone + Eq + Ord + Hash {
     fn create_root(sequence_amount: usize) -> Self;
@@ -113,9 +112,10 @@ struct Context<
     Cost,
     SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
     Identifier,
+    Metric: MultialignMetric<AlphabetType>,
 > {
     sequences: &'sequences [&'sequences SequenceType],
-    character_counts: Vec<u8>,
+    metric: Metric,
 
     phantom_data: PhantomData<(Identifier, AlphabetType, Cost)>,
 }
@@ -125,7 +125,8 @@ impl<
         Cost: AStarCost,
         SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
         Identifier: NodeIdentifier,
-    > AStarContext for Context<'_, AlphabetType, Cost, SequenceType, Identifier>
+        Metric: MultialignMetric<AlphabetType>,
+    > AStarContext for Context<'_, AlphabetType, Cost, SequenceType, Identifier, Metric>
 where
     Cost::CostType: From<i16>,
 {
@@ -145,49 +146,22 @@ where
         for gaps in 1..(1usize << self.sequences.len()) {
             // Compute next identifier and cost.
             let mut identifier = node.identifier.clone();
-            self.character_counts.fill(0);
+            self.metric.reset_character_counts();
 
             for (index, sequence) in self.sequences.iter().enumerate() {
                 if gaps & (1 << index) != 0 && identifier.offset(index) < sequence.len() {
-                    self.character_counts
-                        [usize::from(sequence[identifier.offset(index)].index())] += 1;
+                    self.metric
+                        .count_character(&sequence[identifier.offset(index)]);
                     identifier.increment(index);
                 } else {
                     // Last entry represents a gap.
-                    self.character_counts[usize::from(AlphabetType::SIZE)] += 1;
+                    self.metric.count_gap();
                 }
             }
             let identifier = identifier;
 
             // Compute cost increment.
-            let score_increment =
-                self.character_counts
-                    .iter()
-                    .fold(Cost::zero(), |score, character_count| {
-                        let character_count = i16::from(*character_count);
-                        let character_score = if character_count >= 2 {
-                            Cost::from(Cost::CostType::from(
-                                character_count
-                                    .checked_mul(character_count.checked_sub(1).unwrap())
-                                    .unwrap()
-                                    .checked_div(2)
-                                    .unwrap(),
-                            ))
-                        } else {
-                            Cost::zero()
-                        };
-
-                        score.checked_add(&character_score).unwrap()
-                    });
-            let sequences_len = i16::try_from(self.sequences.len()).unwrap();
-            let max_score = Cost::from(Cost::CostType::from(
-                sequences_len
-                    .checked_mul(sequences_len.checked_sub(1).unwrap())
-                    .unwrap()
-                    .checked_div(2)
-                    .unwrap(),
-            ));
-            let cost_increment = max_score.checked_sub(&score_increment).unwrap();
+            let cost_increment = self.metric.compute_cost_increment();
 
             output.extend(Some(Self::Node {
                 cost: node.cost.checked_add(&cost_increment).unwrap(),
@@ -218,7 +192,8 @@ impl<
         Cost: AStarCost,
         SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
         Identifier: NodeIdentifier,
-    > Reset for Context<'_, AlphabetType, Cost, SequenceType, Identifier>
+        Metric: MultialignMetric<AlphabetType>,
+    > Reset for Context<'_, AlphabetType, Cost, SequenceType, Identifier, Metric>
 {
     fn reset(&mut self) {
         // Do nothing.
@@ -231,12 +206,13 @@ impl<
         Cost: AStarCost,
         SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
         Identifier: NodeIdentifier,
-    > Context<'sequences, AlphabetType, Cost, SequenceType, Identifier>
+        Metric: MultialignMetric<AlphabetType>,
+    > Context<'sequences, AlphabetType, Cost, SequenceType, Identifier, Metric>
 {
-    fn new(sequences: &'sequences [&'sequences SequenceType]) -> Self {
+    fn new(sequences: &'sequences [&'sequences SequenceType], metric: Metric) -> Self {
         Self {
             sequences,
-            character_counts: vec![0; usize::from(AlphabetType::SIZE) + 1],
+            metric,
             phantom_data: PhantomData,
         }
     }
@@ -245,8 +221,10 @@ impl<
 pub fn multialign_astar<
     AlphabetType: Alphabet + Debug + Clone + Eq + 'static,
     SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
+    Metric: MultialignMetric<AlphabetType>,
 >(
     sequences: &[&SequenceType],
+    metric: Metric,
 ) -> Result<()> {
     info!("Aligning {} sequences", sequences.len());
 
@@ -268,195 +246,303 @@ pub fn multialign_astar<
 
     match sequences.len() {
         0 | 1 => panic!("Called multialign_astar with less than two sequences"),
-        2 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<2>>(
-            sequences,
+        2 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<2>, _>(
+            sequences, metric,
         ),
-        3 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<3>>(
-            sequences,
+        3 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<3>, _>(
+            sequences, metric,
         ),
-        4 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<4>>(
-            sequences,
+        4 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<4>, _>(
+            sequences, metric,
         ),
-        5 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<5>>(
-            sequences,
+        5 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<5>, _>(
+            sequences, metric,
         ),
-        6 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<6>>(
-            sequences,
+        6 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<6>, _>(
+            sequences, metric,
         ),
-        7 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<7>>(
-            sequences,
+        7 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<7>, _>(
+            sequences, metric,
         ),
-        8 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<8>>(
-            sequences,
+        8 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<8>, _>(
+            sequences, metric,
         ),
-        9 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<9>>(
-            sequences,
+        9 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<9>, _>(
+            sequences, metric,
         ),
-        10 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<10>>(
-            sequences,
-        ),
-        11 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<11>>(
-            sequences,
-        ),
-        12 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<12>>(
-            sequences,
-        ),
-        13 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<13>>(
-            sequences,
-        ),
-        14 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<14>>(
-            sequences,
-        ),
-        15 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<15>>(
-            sequences,
-        ),
-        16 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<16>>(
-            sequences,
-        ),
-        17 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<17>>(
-            sequences,
-        ),
-        18 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<18>>(
-            sequences,
-        ),
-        19 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<19>>(
-            sequences,
-        ),
-        20 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<20>>(
-            sequences,
-        ),
-        21 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<21>>(
-            sequences,
-        ),
-        22 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<22>>(
-            sequences,
-        ),
-        23 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<23>>(
-            sequences,
-        ),
-        24 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<24>>(
-            sequences,
-        ),
-        25 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<25>>(
-            sequences,
-        ),
-        26 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<26>>(
-            sequences,
-        ),
-        27 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<27>>(
-            sequences,
-        ),
-        28 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<28>>(
-            sequences,
-        ),
-        29 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<29>>(
-            sequences,
-        ),
-        30 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<30>>(
-            sequences,
-        ),
-        31 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<31>>(
-            sequences,
-        ),
-        32 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<32>>(
-            sequences,
-        ),
-        33 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<33>>(
-            sequences,
-        ),
-        34 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<34>>(
-            sequences,
-        ),
-        35 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<35>>(
-            sequences,
-        ),
-        36 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<36>>(
-            sequences,
-        ),
-        37 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<37>>(
-            sequences,
-        ),
-        38 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<38>>(
-            sequences,
-        ),
-        39 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<39>>(
-            sequences,
-        ),
-        40 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<40>>(
-            sequences,
-        ),
-        41 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<41>>(
-            sequences,
-        ),
-        42 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<42>>(
-            sequences,
-        ),
-        43 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<43>>(
-            sequences,
-        ),
-        44 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<44>>(
-            sequences,
-        ),
-        45 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<45>>(
-            sequences,
-        ),
-        46 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<46>>(
-            sequences,
-        ),
-        47 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<47>>(
-            sequences,
-        ),
-        48 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<48>>(
-            sequences,
-        ),
-        49 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<49>>(
-            sequences,
-        ),
-        50 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<50>>(
-            sequences,
-        ),
-        51 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<51>>(
-            sequences,
-        ),
-        52 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<52>>(
-            sequences,
-        ),
-        53 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<53>>(
-            sequences,
-        ),
-        54 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<54>>(
-            sequences,
-        ),
-        55 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<55>>(
-            sequences,
-        ),
-        56 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<56>>(
-            sequences,
-        ),
-        57 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<57>>(
-            sequences,
-        ),
-        58 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<58>>(
-            sequences,
-        ),
-        59 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<59>>(
-            sequences,
-        ),
-        60 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<60>>(
-            sequences,
-        ),
-        61 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<61>>(
-            sequences,
-        ),
-        62 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<62>>(
-            sequences,
-        ),
-        63 => multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<63>>(
-            sequences,
-        ),
-        _ => {
-            multialign_astar_with_identifier::<AlphabetType, SequenceType, VecIdentifier>(sequences)
+        10 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<10>, _>(
+                sequences, metric,
+            )
         }
+        11 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<11>, _>(
+                sequences, metric,
+            )
+        }
+        12 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<12>, _>(
+                sequences, metric,
+            )
+        }
+        13 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<13>, _>(
+                sequences, metric,
+            )
+        }
+        14 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<14>, _>(
+                sequences, metric,
+            )
+        }
+        15 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<15>, _>(
+                sequences, metric,
+            )
+        }
+        16 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<16>, _>(
+                sequences, metric,
+            )
+        }
+        17 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<17>, _>(
+                sequences, metric,
+            )
+        }
+        18 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<18>, _>(
+                sequences, metric,
+            )
+        }
+        19 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<19>, _>(
+                sequences, metric,
+            )
+        }
+        20 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<20>, _>(
+                sequences, metric,
+            )
+        }
+        21 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<21>, _>(
+                sequences, metric,
+            )
+        }
+        22 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<22>, _>(
+                sequences, metric,
+            )
+        }
+        23 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<23>, _>(
+                sequences, metric,
+            )
+        }
+        24 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<24>, _>(
+                sequences, metric,
+            )
+        }
+        25 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<25>, _>(
+                sequences, metric,
+            )
+        }
+        26 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<26>, _>(
+                sequences, metric,
+            )
+        }
+        27 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<27>, _>(
+                sequences, metric,
+            )
+        }
+        28 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<28>, _>(
+                sequences, metric,
+            )
+        }
+        29 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<29>, _>(
+                sequences, metric,
+            )
+        }
+        30 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<30>, _>(
+                sequences, metric,
+            )
+        }
+        31 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<31>, _>(
+                sequences, metric,
+            )
+        }
+        32 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<32>, _>(
+                sequences, metric,
+            )
+        }
+        33 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<33>, _>(
+                sequences, metric,
+            )
+        }
+        34 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<34>, _>(
+                sequences, metric,
+            )
+        }
+        35 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<35>, _>(
+                sequences, metric,
+            )
+        }
+        36 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<36>, _>(
+                sequences, metric,
+            )
+        }
+        37 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<37>, _>(
+                sequences, metric,
+            )
+        }
+        38 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<38>, _>(
+                sequences, metric,
+            )
+        }
+        39 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<39>, _>(
+                sequences, metric,
+            )
+        }
+        40 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<40>, _>(
+                sequences, metric,
+            )
+        }
+        41 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<41>, _>(
+                sequences, metric,
+            )
+        }
+        42 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<42>, _>(
+                sequences, metric,
+            )
+        }
+        43 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<43>, _>(
+                sequences, metric,
+            )
+        }
+        44 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<44>, _>(
+                sequences, metric,
+            )
+        }
+        45 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<45>, _>(
+                sequences, metric,
+            )
+        }
+        46 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<46>, _>(
+                sequences, metric,
+            )
+        }
+        47 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<47>, _>(
+                sequences, metric,
+            )
+        }
+        48 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<48>, _>(
+                sequences, metric,
+            )
+        }
+        49 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<49>, _>(
+                sequences, metric,
+            )
+        }
+        50 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<50>, _>(
+                sequences, metric,
+            )
+        }
+        51 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<51>, _>(
+                sequences, metric,
+            )
+        }
+        52 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<52>, _>(
+                sequences, metric,
+            )
+        }
+        53 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<53>, _>(
+                sequences, metric,
+            )
+        }
+        54 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<54>, _>(
+                sequences, metric,
+            )
+        }
+        55 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<55>, _>(
+                sequences, metric,
+            )
+        }
+        56 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<56>, _>(
+                sequences, metric,
+            )
+        }
+        57 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<57>, _>(
+                sequences, metric,
+            )
+        }
+        58 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<58>, _>(
+                sequences, metric,
+            )
+        }
+        59 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<59>, _>(
+                sequences, metric,
+            )
+        }
+        60 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<60>, _>(
+                sequences, metric,
+            )
+        }
+        61 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<61>, _>(
+                sequences, metric,
+            )
+        }
+        62 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<62>, _>(
+                sequences, metric,
+            )
+        }
+        63 => {
+            multialign_astar_with_identifier::<AlphabetType, SequenceType, ArrayIdentifier<63>, _>(
+                sequences, metric,
+            )
+        }
+        _ => multialign_astar_with_identifier::<AlphabetType, SequenceType, VecIdentifier, _>(
+            sequences, metric,
+        ),
     }
 }
 
@@ -464,11 +550,15 @@ fn multialign_astar_with_identifier<
     AlphabetType: Alphabet + Debug + Clone + Eq + 'static,
     SequenceType: GenomeSequence<AlphabetType, SequenceType> + ?Sized,
     Identifier: NodeIdentifier,
+    Metric: MultialignMetric<AlphabetType>,
 >(
     sequences: &[&SequenceType],
+    metric: Metric,
 ) -> Result<()> {
     let start_time = Instant::now();
-    let mut a_star = AStar::new(Context::<_, I16Cost, _, Identifier>::new(sequences));
+    let mut a_star = AStar::new(Context::<_, I16Cost, _, Identifier, _>::new(
+        sequences, metric,
+    ));
     a_star.initialise();
 
     match a_star.search() {

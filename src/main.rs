@@ -18,7 +18,12 @@ use compact_genome::{
     io::fasta::read_fasta_file,
 };
 use log::{error, info, LevelFilter};
-use multialign::multialign_astar;
+use multialign::{
+    metric::{
+        pairwise_cost_metric::PairwiseCostMetric, pairwise_match_metric::PairwiseMatchMetric,
+    },
+    multialign_astar,
+};
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 
 mod multialign;
@@ -39,6 +44,18 @@ struct Cli {
     /// This must also match the alphabet used in the config.
     #[clap(long, short = 'a', default_value = "famsa-amino-acid")]
     alphabet: InputAlphabet,
+
+    /// The cost metric used for alignment.
+    ///
+    /// Since this algorithm searches for a _shortest_ path through the alignment graph, the metric must be provided in a **lower-is-better** format.
+    /// In other words, the metric must be an alignment _cost_, and not an alignment _score_.
+    ///
+    /// The metric must be a CSV file containing an alignment matrix.
+    /// Dash (`-`) or star (`*`) characters imply a gap character.
+    /// In each step in the multialignment, the metric is applied to all pairs in the step, and summed up.
+    ///
+    /// If no metric is given, the default sum of pairs metric is applied, where each mismatching pair has a cost of one.
+    metric: Option<PathBuf>,
 
     /// A string of (ASCII) characters that should be skipped in the input fasta.
     ///
@@ -149,7 +166,17 @@ fn execute_with_alphabet<AlphabetType: Alphabet + Debug + Clone + Eq + 'static>(
                 .as_genome_subsequence()
         })
         .collect();
-    multialign_astar(&sequences)
+
+    match &cli.metric {
+        Some(csv) => multialign_astar(
+            &sequences,
+            PairwiseCostMetric::from_csv_file(csv, sequences.len())?,
+        ),
+        None => multialign_astar(
+            &sequences,
+            PairwiseMatchMetric::<AlphabetType>::new(sequences.len())?,
+        ),
+    }
 }
 
 fn list_duplicates<T: Eq + Ord>(slice: &[T]) -> Vec<&T> {
