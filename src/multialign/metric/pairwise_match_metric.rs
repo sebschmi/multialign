@@ -10,7 +10,7 @@ use super::MultialignMetric;
 /// Specifically, pairs of gaps are scored with zero as well.
 pub struct PairwiseMatchMetric<AlphabetType: Alphabet> {
     character_counts: Vec<u8>,
-    sequence_amount: i16,
+    sequence_amount: i32,
     phantom_data: PhantomData<AlphabetType>,
 }
 
@@ -18,7 +18,7 @@ impl<AlphabetType: Alphabet> PairwiseMatchMetric<AlphabetType> {
     pub fn new(sequence_amount: usize) -> Result<Self> {
         Ok(Self {
             character_counts: vec![0; usize::from(AlphabetType::SIZE) + 1],
-            // We multiply the i16 by itself later, so we restrict to i8 to make sure it does not overflow.
+            // We multiply the i32 by itself later, so we restrict to i8 to make sure it does not overflow.
             sequence_amount: i8::try_from(sequence_amount)
                 .with_context(|| format!("Metric supports at most {} sequences", i8::MAX))?
                 .into(),
@@ -40,15 +40,15 @@ impl<AlphabetType: Alphabet> MultialignMetric<AlphabetType> for PairwiseMatchMet
         self.character_counts[usize::from(AlphabetType::SIZE)] += 1;
     }
 
-    fn compute_cost_increment<Cost: generic_a_star::cost::AStarCost>(&self) -> Cost
+    fn compute_cost_increment<Cost: generic_a_star::cost::AStarCost>(&mut self) -> Result<Cost>
     where
-        Cost::CostType: From<i16>,
+        Cost::CostType: From<i32>,
     {
         let score_increment =
             self.character_counts
                 .iter()
                 .fold(Cost::zero(), |score, character_count| {
-                    let character_count = i16::from(*character_count);
+                    let character_count = i32::from(*character_count);
                     let character_score = if character_count >= 2 {
                         Cost::from(Cost::CostType::from(
                             character_count
@@ -70,6 +70,6 @@ impl<AlphabetType: Alphabet> MultialignMetric<AlphabetType> for PairwiseMatchMet
                 .checked_div(2)
                 .unwrap(),
         ));
-        max_score.checked_sub(&score_increment).unwrap()
+        Ok(max_score.checked_sub(&score_increment).unwrap())
     }
 }

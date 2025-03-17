@@ -10,7 +10,7 @@ use std::{
 use anyhow::{bail, Context as _, Result};
 use compact_genome::interface::{alphabet::Alphabet, sequence::GenomeSequence};
 use generic_a_star::{
-    cost::{AStarCost, I16Cost},
+    cost::{AStarCost, I32Cost},
     reset::Reset,
     AStar, AStarContext, AStarNode, AStarResult,
 };
@@ -128,7 +128,7 @@ impl<
         Metric: MultialignMetric<AlphabetType>,
     > AStarContext for Context<'_, AlphabetType, Cost, SequenceType, Identifier, Metric>
 where
-    Cost::CostType: From<i16>,
+    Cost::CostType: From<i32>,
 {
     type Node = Node<Identifier, Cost>;
 
@@ -161,7 +161,7 @@ where
             let identifier = identifier;
 
             // Compute cost increment.
-            let cost_increment = self.metric.compute_cost_increment();
+            let cost_increment = self.metric.compute_cost_increment().unwrap();
 
             output.extend(Some(Self::Node {
                 cost: node.cost.checked_add(&cost_increment).unwrap(),
@@ -184,6 +184,10 @@ where
 
     fn memory_limit(&self) -> Option<usize> {
         None
+    }
+
+    fn is_label_setting(&self) -> bool {
+        false
     }
 }
 
@@ -556,7 +560,7 @@ fn multialign_astar_with_identifier<
     metric: Metric,
 ) -> Result<()> {
     let start_time = Instant::now();
-    let mut a_star = AStar::new(Context::<_, I16Cost, _, Identifier, _>::new(
+    let mut a_star = AStar::new(Context::<_, I32Cost, _, Identifier, _>::new(
         sequences, metric,
     ));
     a_star.initialise();

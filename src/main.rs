@@ -55,6 +55,7 @@ struct Cli {
     /// In each step in the multialignment, the metric is applied to all pairs in the step, and summed up.
     ///
     /// If no metric is given, the default sum of pairs metric is applied, where each mismatching pair has a cost of one.
+    #[clap(long, short = 'm')]
     metric: Option<PathBuf>,
 
     /// A string of (ASCII) characters that should be skipped in the input fasta.
@@ -168,10 +169,7 @@ fn execute_with_alphabet<AlphabetType: Alphabet + Debug + Clone + Eq + 'static>(
         .collect();
 
     match &cli.metric {
-        Some(csv) => multialign_astar(
-            &sequences,
-            PairwiseCostMetric::from_csv_file(csv, sequences.len())?,
-        ),
+        Some(csv) => multialign_astar(&sequences, PairwiseCostMetric::from_csv_file(csv)?),
         None => multialign_astar(
             &sequences,
             PairwiseMatchMetric::<AlphabetType>::new(sequences.len())?,

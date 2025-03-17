@@ -1,3 +1,4 @@
+use anyhow::Result;
 use compact_genome::interface::alphabet::Alphabet;
 use generic_a_star::cost::AStarCost;
 
@@ -11,7 +12,7 @@ pub trait MultialignMetric<AlphabetType: Alphabet> {
 
     fn count_gap(&mut self);
 
-    fn compute_cost_increment<Cost: AStarCost>(&self) -> Cost
+    fn compute_cost_increment<Cost: AStarCost>(&mut self) -> Result<Cost>
     where
-        Cost::CostType: From<i16>;
+        Cost::CostType: From<i32>;
 }
